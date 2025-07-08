@@ -1,8 +1,13 @@
-
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, Tuple)
 
 import torch
 import inspect
+
+# 导入设备兼容性工具
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
 
 from diffusers import StableDiffusionPipeline
 from diffusers.image_processor import PipelineImageInput
@@ -174,8 +179,9 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
 
             del ret
 
+            # 将结果移动到CPU进行多进程传递
             mp_queues[1].put(
-                (model_output_chunk, idx),
+                (model_output_chunk.cpu(), idx),
             )
 
 
@@ -515,8 +521,8 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
 
 
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
 
         end_i = parallel
@@ -550,8 +556,8 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
 
 
 
-                # start1 = torch.cuda.Event(enable_timing=True)
-                # end1 = torch.cuda.Event(enable_timing=True)
+                # start1 = create_event(enable_timing=True)
+                # end1 = create_event(enable_timing=True)
                 # start1.record()
 
                 if parallel_len <= 2 or num_consumers == 1:
@@ -568,8 +574,9 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
                     num_chunks = min(parallel_len, num_consumers)
 
                     for idx1 in range(num_chunks):
+                        # 将张量移动到CPU进行多进程传递
                         mp_queues[0].put(
-                            (latent_model_input, t_vec, block_prompt_embeds, self.cross_attention_kwargs, chunks[idx1], idx1, begin_idx)
+                            (latent_model_input.cpu(), t_vec.cpu(), block_prompt_embeds.cpu(), self.cross_attention_kwargs, chunks[idx1], idx1, begin_idx)
                         )
 
                     model_output = [None for _ in range(num_chunks)]
@@ -583,7 +590,7 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
                     model_output = torch.cat(model_output)
 
                 # end1.record()
-                # torch.cuda.synchronize()
+                # synchronize()
                 # elapsed = start1.elapsed_time(end1)
                 # elapsed_per_t = elapsed / parallel_len
                 # #print("model parallel elapsed time:", elapsed, "elapsed_per_t:", elapsed_per_t)
@@ -670,7 +677,7 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
         print("flop count", stats_flop_count)
         end.record()
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
 
 
         print("initial elapsed time:", initial_para_dur)
@@ -777,8 +784,8 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
             initial_para_dur = 0
             stats_pass_count = 0
             stats_flop_count = 0
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
+            start = create_event(enable_timing=True)
+            end = create_event(enable_timing=True)
             start.record()
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
@@ -827,7 +834,7 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
                             stats_flop_count += 1 * latents.size()[1]
 
                             end.record()
-                            torch.cuda.synchronize()
+                            synchronize()
                             initial_para_dur = start.elapsed_time(end)
 
                         else:
@@ -891,8 +898,8 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
             - For DDPM step details, see scheduler.step implementation
         """
         with torch.no_grad():
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
+            start = create_event(enable_timing=True)
+            end = create_event(enable_timing=True)
             start.record()
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
@@ -908,6 +915,6 @@ class ParaSolverDDPMStableDiffusionPipeline(StableDiffusionPipeline):
                         else:
                             self.initial_latents[timesteps[i+1].item()] = image
             end.record()
-            torch.cuda.synchronize()
+            synchronize()
             initial_para_dur = start.elapsed_time(end)
         return initial_para_dur

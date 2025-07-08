@@ -1,4 +1,3 @@
-
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -17,6 +16,13 @@ from typing import (
 
 import numpy as np
 import torch
+import sys
+import os
+
+# 导入设备兼容性工具
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
+
 from diffusers.configuration_utils import register_to_config
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler, DDPMSchedulerOutput
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers
@@ -227,8 +233,8 @@ class ParaDDPMScheduler(DDPMScheduler):
         pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * sample
         # 6. Add noise
         variance = 0
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
 
         if not self._is_ode_scheduler:
@@ -261,7 +267,7 @@ class ParaDDPMScheduler(DDPMScheduler):
             pred_prev_sample = pred_prev_sample + variance
         end.record()
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
         noise_generation_times = start.elapsed_time(end)
         return pred_prev_sample,noise_generation_times,pred_original_sample
     def batch_step_no_noise(
@@ -606,44 +612,5 @@ class ParaDDPMScheduler(DDPMScheduler):
         self.max_fine_timestep_num = max_interval_len
         self.coarse_timestep_num = num_time_subintervals
 
-        #print(total_steps, num_time_subintervals, N_F)
-        if total_steps // num_time_subintervals < N_F:
-            raise ValueError(f"`parallel_time_interval_num` must be no more than {total_steps // num_time_subintervals}.")
-        # 创建时间步列表
-        time_steps = list(self.timesteps)
-        # #print(time_steps)
-        # sigmas = list(self.sigmas)
-        # #print(sigmas)
-        # 计算每个区间的长度
-        interval_length = total_steps // num_time_subintervals
-
-        # 创建子区间
-        intervals = []
-        # sigmas_intervals = []
-        for i in range(num_time_subintervals):
-            start_index = i * interval_length
-            if i == num_time_subintervals - 1:  # 最后一个区间包括所有剩余的元素
-                end_index = None
-            else:
-                end_index = (i + 1) * interval_length
-            intervals.append(time_steps[start_index:end_index])
-            # sigmas_intervals.append(sigmas[start_index:end_index])
-
-        # 从每个子区间中均匀取出N_F个时间步
-        selected_steps = []
-        for interval in intervals:
-            if len(interval) <= N_F:
-                selected_steps.append(interval)
-            else:
-                step_size = len(interval) // N_F
-                selected_steps.append([interval[j] for j in range(0, len(interval), step_size)[:N_F]])
-        # 从每个子区间中均匀取出N_F个时间步
-        # selected_sigmas = []
-        # for interval_sigms in sigmas_intervals:
-        #     if len(interval_sigms) <= N_F:
-        #         selected_sigmas.append(interval_sigms)
-        #     else:
-        #         step_size = len(interval_sigms) // N_F
-        #         selected_sigmas.append([interval_sigms[j] for j in range(0, len(interval_sigms), step_size)[:N_F]])
-
-        return selected_steps
+        # 返回fine_timesteps_matrix，这是主要的功能
+        return self.fine_timesteps_matrix

@@ -138,6 +138,9 @@ image.save("generated_image.png")
 For multi-GPU usage, please run [`Expr_CMP_SD.py`](Expr_CMP_SD.py) in the repository with appropriate configuration.
 ```python
 python Expr_CMP_SD.py
+### the above command is using NVIDIA's GPUS. If you want to use Huawei's NPUs,
+### the command is the same but some of the methods in Expr_CMP_SD.py and 
+### Expr_CMP_LSUN.py may not work due to NPU's hardware and software constraints.
 ```
 
 

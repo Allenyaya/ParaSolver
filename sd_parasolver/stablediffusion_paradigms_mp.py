@@ -1,7 +1,13 @@
-
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch.jit._state
+
+import sys
+import os
+
+# 导入设备兼容性工具
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
 
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
 from diffusers import StableDiffusionPipeline
@@ -297,8 +303,8 @@ class ParaStableDiffusionPipeline(StableDiffusionPipeline):
 
         scaled_tolerance = (tolerance ** 2)
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
 
         start.record()
         k = 1
@@ -319,8 +325,8 @@ class ParaStableDiffusionPipeline(StableDiffusionPipeline):
             latent_model_input = torch.cat([block_latents] * 2, dim=1) if do_classifier_free_guidance else block_latents
             latent_model_input = self.scheduler.scale_model_input(latent_model_input, t_vec)
 
-            start1 = torch.cuda.Event(enable_timing=True)
-            end1 = torch.cuda.Event(enable_timing=True)
+            start1 = create_event(enable_timing=True)
+            end1 = create_event(enable_timing=True)
 
             start1.record()
 
@@ -356,7 +362,7 @@ class ParaStableDiffusionPipeline(StableDiffusionPipeline):
             end1.record()
 
             # Waits for everything to finish running
-            torch.cuda.synchronize()
+            synchronize()
 
             print(begin_idx, end_idx, flush=True)
             elapsed = start1.elapsed_time(end1)
@@ -438,7 +444,7 @@ class ParaStableDiffusionPipeline(StableDiffusionPipeline):
         end.record()
 
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
 
         print(start.elapsed_time(end))
         print("done", flush=True)

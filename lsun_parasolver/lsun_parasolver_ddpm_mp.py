@@ -1,4 +1,3 @@
-
 from typing import TYPE_CHECKING, List, Tuple, Union, Optional
 
 if TYPE_CHECKING:
@@ -7,6 +6,14 @@ if TYPE_CHECKING:
 
 import torch
 import inspect
+import sys
+import os
+
+# 导入设备兼容性工具
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+from device_utils import create_event, synchronize
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines.pipeline_utils import ImagePipelineOutput
 from diffusers.pipelines import DDPMPipeline
@@ -164,8 +171,8 @@ class ParaSolverDDPMDiffusionPipeline(DDPMPipeline):
             initial_para_dur = 0
             stats_pass_count = 0
             stats_flop_count = 0
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
+            start = create_event(enable_timing=True)
+            end = create_event(enable_timing=True)
             start.record()
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
@@ -183,7 +190,7 @@ class ParaSolverDDPMDiffusionPipeline(DDPMPipeline):
                             stats_flop_count += 1 * image.size()[1]
 
                             end.record()
-                            torch.cuda.synchronize()
+                            synchronize()
                             initial_para_dur = start.elapsed_time(end)
 
                         else:
@@ -338,8 +345,8 @@ class ParaSolverDDPMDiffusionPipeline(DDPMPipeline):
 
 
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
 
         end_i = parallel
@@ -391,7 +398,7 @@ class ParaSolverDDPMDiffusionPipeline(DDPMPipeline):
                     model_output = torch.cat(model_output)
 
                 # end1.record()
-                # torch.cuda.synchronize()
+                # synchronize()
                 # elapsed = start1.elapsed_time(end1)
                 # elapsed_per_t = elapsed / parallel_len
                 # #print("model parallel elapsed time:", elapsed, "elapsed_per_t:", elapsed_per_t)
@@ -468,7 +475,7 @@ class ParaSolverDDPMDiffusionPipeline(DDPMPipeline):
         print("flop count", stats_flop_count)
         end.record()
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
 
         print("initial elapsed time:", initial_para_dur)
         print("noise elapsed time:", noises_dur_time)
@@ -518,8 +525,8 @@ class ParaSolverDDPMDiffusionPipeline(DDPMPipeline):
         end_point:int=0
         ):
         with torch.no_grad():
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
+            start = create_event(enable_timing=True)
+            end = create_event(enable_timing=True)
             start.record()
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):
@@ -535,6 +542,6 @@ class ParaSolverDDPMDiffusionPipeline(DDPMPipeline):
                         else:
                             self.initial_latents[timesteps[i+1].item()] = image
             end.record()
-            torch.cuda.synchronize()
+            synchronize()
             initial_para_dur = start.elapsed_time(end)
         return initial_para_dur

@@ -1,6 +1,13 @@
 from typing import TYPE_CHECKING, List, Optional, Union
 
 import torch
+import sys
+import os
+
+# 导入设备兼容性工具
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
+
 from diffusers.pipelines import DDIMPipeline
 from diffusers.pipelines.pipeline_utils import ImagePipelineOutput
 from diffusers.utils.torch_utils import randn_tensor
@@ -73,8 +80,8 @@ class SequentialDDIMDiffusionPipeline(DDIMPipeline):
 
         stats_pass_count = 0
         stats_flop_count = 0
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
 
 
@@ -98,7 +105,7 @@ class SequentialDDIMDiffusionPipeline(DDIMPipeline):
         print("flop count", stats_flop_count)
         end.record()
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
 
         print("sequential ddim elapsed time:",start.elapsed_time(end))
         stats = {

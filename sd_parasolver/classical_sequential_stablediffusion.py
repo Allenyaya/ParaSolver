@@ -18,6 +18,12 @@ import inspect
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Sequence, Set, TypeVar, Union, cast,Any,Callable,Tuple
 import torch
 
+# 导入设备兼容性工具
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
+
 
 def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     """
@@ -355,8 +361,8 @@ class SequentialStableDiffusionPipeline(StableDiffusionPipeline):
 
         stats_pass_count = 0
         stats_flop_count = 0
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -419,7 +425,7 @@ class SequentialStableDiffusionPipeline(StableDiffusionPipeline):
         end.record()
 
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
 
         print(start.elapsed_time(end))
         print("done", flush=True)

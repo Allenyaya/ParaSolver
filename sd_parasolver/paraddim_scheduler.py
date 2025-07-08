@@ -4,9 +4,15 @@ from diffusers.utils import BaseOutput
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers
 import math
+import sys
+import os
 from typing import List, Optional, Tuple, Union
 import numpy as np
 import torch
+
+# 导入设备兼容性工具
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
 
 
 
@@ -478,8 +484,8 @@ class ParaDDIMScheduler(DDIMScheduler):
         # 6. compute x_t without "random noise" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
         prev_sample = alpha_prod_t_prev ** (0.5) * pred_original_sample + pred_sample_direction
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
         if eta > 0:
             def create_generators(timesteps):
@@ -508,7 +514,7 @@ class ParaDDIMScheduler(DDIMScheduler):
             prev_sample = prev_sample + variance
         end.record()
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
         noise_generation_times = start.elapsed_time(end)
         return prev_sample,noise_generation_times,pred_original_sample
     def batch_step_no_noise(
@@ -586,6 +592,7 @@ class ParaDDIMScheduler(DDIMScheduler):
         # "predicted x_0" of formula (12) from https://arxiv.org/pdf/2010.02502.pdf
         if self.config.prediction_type == "epsilon":
             pred_original_sample = (sample - beta_prod_t ** (0.5) * model_output) / alpha_prod_t ** (0.5)
+
             pred_epsilon = model_output
         elif self.config.prediction_type == "sample":
             pred_original_sample = model_output
@@ -599,7 +606,7 @@ class ParaDDIMScheduler(DDIMScheduler):
                 " `v_prediction`"
             )
 
-        #3. Clip or threshold "predicted x_0"
+        # 3. Clip or threshold "predicted x_0"
         if self.config.thresholding:
             pred_original_sample = self._threshold_sample(pred_original_sample)
         elif self.config.clip_sample:

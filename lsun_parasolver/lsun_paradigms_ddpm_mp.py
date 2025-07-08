@@ -1,8 +1,14 @@
-
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import torch.jit
     import torch.jit._state
+
+import sys
+import os
+
+# 导入设备兼容性工具
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
 
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers.pipelines import DDPMPipeline
@@ -176,13 +182,13 @@ class ParaDiGMSDDPMDiffusionPipeline(DDPMPipeline):
 
         scaled_tolerance = (tolerance ** 2)
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
 
         while begin_idx < num_inference_steps:
-            # start2 = torch.cuda.Event(enable_timing=True)
-            # end2 = torch.cuda.Event(enable_timing=True)
+            # start2 = create_event(enable_timing=True)
+            # end2 = create_event(enable_timing=True)
             # start2.record()
             # these have shape (parallel_dim, 2*batch_size, ...)
             # parallel_len is at most parallel, but could be less if we are at the end of the timesteps
@@ -198,8 +204,8 @@ class ParaDiGMSDDPMDiffusionPipeline(DDPMPipeline):
             latent_model_input = block_latents
 
 
-            # start1 = torch.cuda.Event(enable_timing=True)
-            # end1 = torch.cuda.Event(enable_timing=True)
+            # start1 = create_event(enable_timing=True)
+            # end1 = create_event(enable_timing=True)
 
             # start1.record()
 
@@ -232,7 +238,7 @@ class ParaDiGMSDDPMDiffusionPipeline(DDPMPipeline):
             # end1.record()
 
             # # Waits for everything to finish running
-            # torch.cuda.synchronize()
+            # synchronize()
 
             # print(begin_idx, end_idx, flush=True)
             # elapsed = start1.elapsed_time(end1)
@@ -295,7 +301,7 @@ class ParaDiGMSDDPMDiffusionPipeline(DDPMPipeline):
 
             # end2.record()
             # # Waits for everything to finish running
-            # torch.cuda.synchronize()
+            # synchronize()
 
             print(f"begin_idx：{begin_idx}, end_idx:{end_idx}", flush=True)
             # elapsed1 = start2.elapsed_time(end2)
@@ -304,7 +310,7 @@ class ParaDiGMSDDPMDiffusionPipeline(DDPMPipeline):
 
         end.record()
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        synchronize()
         print("parallel ParaDiGMS_DDPM pipeline end!")
         print("pass count", stats_pass_count)
         print("flop count", stats_flop_count)

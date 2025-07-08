@@ -1,14 +1,20 @@
+import os
+# 禁用 TensorFlow 后端，避免段错误
+os.environ['USE_TF'] = 'NO'
+os.environ['USE_TORCH'] = 'YES'
 
 import torch
-import os
 import torch.multiprocessing as mp
 import pandas as pd
 
-
-
-
-
-
+# 添加NPU支持
+try:
+    import torch_npu
+    torch_npu.npu.set_compile_mode(jit_compile=False)
+    print("torch_npu loaded successfully")
+except ImportError:
+    print("torch_npu not available, falling back to CPU")
+    torch_npu = None
 
 #Sequential
 from diffusers.schedulers import DDIMScheduler,DDPMScheduler
@@ -26,13 +32,6 @@ from lsun_parasolver.lsun_paradigms_ddpm_mp import ParaDiGMSDDPMDiffusionPipelin
 from lsun_parasolver.lsun_parasolver_ddpm_mp import ParaSolverDDPMDiffusionPipeline
 from lsun_parasolver.lsun_parasolver_ddim_mp import ParaSolverDDIMDiffusionPipeline
 
-
-
-
-
-
-
-
 TOPIC = "lsun_church"
 MODEL_ID = "google/ddpm-ema-church-256"
 HOME_DIR = "./"
@@ -42,7 +41,18 @@ HOME_DIR = "./"
 def run(rank, total_ranks, queues,shared_list):
     gups,random_seed, method, SCHEDULER_CONFIGS = shared_list[0]
     model_str = MODEL_ID
-    device = torch.device(f"cuda:{gups[0]}" if torch.cuda.is_available() else "cpu")
+    
+    # 修改设备检测逻辑，支持NPU
+    if torch_npu and torch_npu.npu.is_available():
+        device = torch.device(f"npu:{gups[0]}")
+        device_type = "npu"
+    elif torch.cuda.is_available():
+        device = torch.device(f"cuda:{gups[0]}")
+        device_type = "cuda"
+    else:
+        device = torch.device("cpu")
+        device_type = "cpu"
+    
     method = SCHEDULER_CONFIGS[method][0]
     num_inference_steps = SCHEDULER_CONFIGS[method][1]
     generator = torch.Generator()
@@ -68,47 +78,62 @@ def run(rank, total_ranks, queues,shared_list):
 
     if method in ["ParaDiGMS_DDPM"]:
         pipe = ParaDiGMSDDPMDiffusionPipeline.from_pretrained(
-            model_str, scheduler=scheduler, torch_dtype=torch_dtype,safety_checker=None
+            model_str, scheduler=scheduler, torch_dtype=torch_dtype, use_safetensors=False
         )
     elif method in ["ParaDiGMS_DDIM"]:
         pipe = ParaDiGMSDDIMDiffusionPipeline.from_pretrained(
-            model_str, scheduler=scheduler, torch_dtype=torch_dtype,safety_checker=None
+            model_str, scheduler=scheduler, torch_dtype=torch_dtype, use_safetensors=False
         )
 
 
     elif method in ["ParaSolver_DDPM"]:
         pipe = ParaSolverDDPMDiffusionPipeline.from_pretrained(
-            model_str, scheduler=scheduler, torch_dtype=torch_dtype,safety_checker=None
+            model_str, scheduler=scheduler, torch_dtype=torch_dtype, use_safetensors=False
         )
     elif method in ["ParaSolver_DDIM"]:
         pipe  = ParaSolverDDIMDiffusionPipeline.from_pretrained(
-            model_str, scheduler=scheduler, torch_dtype=torch_dtype,safety_checker=None
+            model_str, scheduler=scheduler, torch_dtype=torch_dtype, use_safetensors=False
         )
 
 
     elif method in ["DDPM"]:
         pipe = SequentialDDPMDiffusionPipeline.from_pretrained(
-            model_str, scheduler=scheduler, torch_dtype=torch_dtype,safety_checker=None
+            model_str, scheduler=scheduler, torch_dtype=torch_dtype, use_safetensors=False
         )
     elif method in ["DDIM"]:
         pipe = SequentialDDIMDiffusionPipeline.from_pretrained(
-            model_str, scheduler=scheduler, torch_dtype=torch_dtype,safety_checker=None
+            model_str, scheduler=scheduler, torch_dtype=torch_dtype, use_safetensors=False
         )
 
     else:
         raise ValueError("not implemented")
     pipe.unet.eval()
-    pipe.enable_xformers_memory_efficient_attention()
+    try:
+        pipe.enable_xformers_memory_efficient_attention()
+    except ModuleNotFoundError:
+        print("xformers not installed; continuing without it.")
     if rank != -1:
         if method not in ["DDPM",  "DDIM"]:
-            pipe = pipe.to(f"cuda:{gups[rank]}")
+            pipe = pipe.to(f"{device_type}:{gups[rank]}")
             # pipe.paradigms_forward = types.MethodType(paradigms_forward_worker, pipe)
-            pipe.paradigms_forward_worker(mp_queues=queues, device=f"cuda:{gups[rank]}")
+            pipe.paradigms_forward_worker(mp_queues=queues, device=f"{device_type}:{gups[rank]}")
     else:
         pipe = pipe.to(device)
-        # ngpu_sweep = [(i + 1) for i in range(torch.cuda.device_count())]
-        ngpu_sweep = [x + 1 for x in gups]
+        # 修改GPU数量检测
+        if torch_npu and torch_npu.npu.is_available():
+            max_devices = torch_npu.npu.device_count()
+        elif torch.cuda.is_available():
+            max_devices = torch.cuda.device_count()
+        else:
+            max_devices = 1
+            
+        # 确保gups不为空
+        if not gups:
+            gups = [0] if max_devices > 0 else []
+            
+        ngpu_sweep = [x + 1 for x in gups] if gups else [1]
         ngpu_sweep = ngpu_sweep[-1:]
+        
         if method  in ["DDPM",  "DDIM"]:#Not a parallel method, only use one GPU.
             parallel_sweep = [1]
         else: #parallel method
@@ -153,7 +178,7 @@ def run(rank, total_ranks, queues,shared_list):
                                 # warmup
                                 # generator.manual_seed(random_seed)
                                 _, _ = pipe.parasolver_forward(batch_size=1,num_inference_steps=8,
-                                                                          num_time_subintervals=num_consumers, num_preconditioning_steps=num_preconditioning_steps
+                                                                          num_time_subintervals=num_consumers, num_preconditioning_steps=num_preconditioning_steps,
                                                                           parallel=parallel,
                                                                           tolerance=tolerance, output_type="np",
                                                                           full_return=False,
@@ -215,7 +240,10 @@ def run(rank, total_ranks, queues,shared_list):
                                 raise ValueError(f"not supported method: {method}")
 
 
-                            torch.cuda.empty_cache()
+                            # 统一的设备缓存清理
+                            from device_utils import empty_cache
+                            empty_cache()
+                            
                             generated_images = output.images
                             one_pil_image = pipe.numpy_to_pil(generated_images[0])[0]
                             image_savepath = f'image_expr_name_CMP_LSUN/num_{num_inference_steps}_N_{num_time_subintervals}_parallel_{parallel}_M_{num_preconditioning_steps}_{method}_tor_{tolerance}/pass_{stats["pass_count"]}_flop_{stats["flops_count"]}_time_{int(stats["time"])}_prt_id_{chunk_id}.png'
@@ -283,19 +311,29 @@ if __name__ == "__main__":
     num_inference_steps = 50  # setings: 25 and 50
     num_inference_steps = 1000  # setings: 25 and 50
 
+    # 修改设备检测逻辑
+    if torch_npu and torch_npu.npu.is_available():
+        gpus = [i for i in range(torch_npu.npu.device_count())]
+        print(f"检测到 {len(gpus)} 个NPU设备")
+    elif torch.cuda.is_available():
+        gpus = [i for i in range(torch.cuda.device_count())]
+        print(f"检测到 {len(gpus)} 个CUDA设备")
+    else:
+        gpus = [0]  # 使用CPU时至少有一个设备
+        print("未检测到GPU/NPU，使用CPU")
 
-    gpus = [i for i in range(torch.cuda.device_count())]
 
+    ### below are the methods to be tested, 
+    ### those methods that comes with a x mark are not suitable for huawei npu due to hardware limitations.
 
-
-    method = "ParaSolver_DDPM"
-    # method = "ParaDiGMS_DDPM" 
+    # method = "ParaSolver_DDPM" x
+    # method = "ParaDiGMS_DDPM" x 
     # method = "DDPM"
 
 
-    # method = "ParaSolver_DDIM"
-    # method = "ParaDiGMS_DDIM"
-    # method = "DDIM"
+    # method = "ParaSolver_DDIM" x
+    # method = "ParaDiGMS_DDIM" x
+    method = "DDIM"
 
 
 

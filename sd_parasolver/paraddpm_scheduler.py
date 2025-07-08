@@ -8,6 +8,12 @@ from typing import (
 
 import numpy as np
 import torch
+# 导入设备兼容性工具
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from device_utils import create_event, synchronize
+
 from diffusers.configuration_utils import register_to_config
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler, DDPMSchedulerOutput
 from diffusers.schedulers.scheduling_utils import KarrasDiffusionSchedulers
@@ -176,7 +182,13 @@ class ParaDDPMScheduler(DDPMScheduler):
         self.alphas_cumprod = self.alphas_cumprod.to(model_output.device)
         alpha_prod_t = self.alphas_cumprod[t]
         alpha_prod_t_prev = self.alphas_cumprod[ torch.clip(prev_t, min=0) ]
-        alpha_prod_t_prev[ prev_t < 0 ] = torch.tensor(1.0)
+        # alpha_prod_t_prev[ prev_t < 0 ] = torch.tensor(1.0)
+        # alpha_prod_t_prev[ prev_t < 0 ] = torch.tensor(1.0, device=model_output.device, dtype=model_output.dtype)
+        mask = prev_t < 0
+        if mask.any():
+            ones_tensor = torch.ones_like(alpha_prod_t_prev[mask]) 
+            alpha_prod_t_prev[mask] = ones_tensor
+
 
         beta_prod_t = 1 - alpha_prod_t
         beta_prod_t_prev = 1 - alpha_prod_t_prev
@@ -214,8 +226,10 @@ class ParaDDPMScheduler(DDPMScheduler):
         # See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
         pred_prev_sample = pred_original_sample_coeff * pred_original_sample + current_sample_coeff * sample
 
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
+        # start = create_event(enable_timing=True)
+        # end = create_event(enable_timing=True)
+        start = create_event(enable_timing=True)
+        end = create_event(enable_timing=True)
         start.record()
 
         if not self._is_ode_scheduler:
@@ -251,7 +265,8 @@ class ParaDDPMScheduler(DDPMScheduler):
             pred_prev_sample = pred_prev_sample + variance
         end.record()
         # Waits for everything to finish running
-        torch.cuda.synchronize()
+        # synchronize()
+        synchronize()
         noise_generation_times = start.elapsed_time(end)
         return pred_prev_sample,noise_generation_times,pred_original_sample
     def batch_step_no_noise(
@@ -294,7 +309,12 @@ class ParaDDPMScheduler(DDPMScheduler):
         self.alphas_cumprod = self.alphas_cumprod.to(model_output.device)
         alpha_prod_t = self.alphas_cumprod[t]
         alpha_prod_t_prev = self.alphas_cumprod[ torch.clip(prev_t, min=0) ]
-        alpha_prod_t_prev[ prev_t < 0 ] = torch.tensor(1.0)
+        # alpha_prod_t_prev[ prev_t < 0 ] = torch.tensor(1.0)
+        # alpha_prod_t_prev[ prev_t < 0 ] = torch.tensor(1.0, device=model_output.device, dtype=model_output.dtype)
+        mask = prev_t < 0
+        if mask.any():
+            ones_tensor = torch.ones_like(alpha_prod_t_prev[mask])
+            alpha_prod_t_prev[mask] = ones_tensor
 
         beta_prod_t = 1 - alpha_prod_t
         beta_prod_t_prev = 1 - alpha_prod_t_prev
@@ -336,7 +356,12 @@ class ParaDDPMScheduler(DDPMScheduler):
         # prev_timestep = timestep - self.config.num_train_timesteps // self.num_inference_steps
         # #print("prev_timestep", prev_timestep)
         alpha_prod_t = self.alphas_cumprod[timestep]
-        alpha_prod_t_prev = self.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else torch.tensor(1.0)
+        # alpha_prod_t_prev = self.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else torch.tensor(1.0)
+        # alpha_prod_t_prev = self.alphas_cumprod[prev_timestep] if prev_timestep >= 0 else torch.tensor(1.0, device=self.alphas_cumprod.device, dtype=self.alphas_cumprod.dtype)
+        if prev_timestep >= 0:
+            alpha_prod_t_prev = self.alphas_cumprod[prev_timestep]
+        else:
+            alpha_prod_t_prev = torch.ones_like(self.alphas_cumprod[0])
         beta_prod_t = 1 - alpha_prod_t
         beta_prod_t_prev = 1 - alpha_prod_t_prev
 
